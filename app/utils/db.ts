@@ -114,6 +114,7 @@ export async function initializeDatabase({
 
       CREATE TABLE IF NOT EXISTS contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        external_id TEXT UNIQUE, 
         firstname TEXT,
         surname TEXT,
         email TEXT,
@@ -124,10 +125,12 @@ export async function initializeDatabase({
         city TEXT,
         postal TEXT,
         phone TEXT,
-        external_id TEXT,
         electoral_district TEXT,
         poll_id TEXT,
         voted BOOLEAN,
+        ride_status TEXT,
+        last_contacted TEXT,
+        last_contacted_by TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         created_by INTEGER,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -190,6 +193,7 @@ export async function initializeDatabase({
 
       CREATE TABLE IF NOT EXISTS contacts (
         id SERIAL PRIMARY KEY,
+        external_id TEXT UNIQUE,
         firstname TEXT,
         surname TEXT,
         email TEXT,
@@ -200,10 +204,12 @@ export async function initializeDatabase({
         city TEXT,
         postal TEXT,
         phone TEXT,
-        external_id TEXT,
         electoral_district TEXT,
         poll_id TEXT,
         voted BOOLEAN,
+        ride_status TEXT,
+        last_contacted TEXT,
+        last_contacted_by TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         created_by INTEGER REFERENCES users(id),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

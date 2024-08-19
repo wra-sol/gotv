@@ -10,6 +10,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { getLastChangeId, pollForChanges } from "~/models/live";
 import { useFileChanges } from "~/hooks/useFileChanges";
 import { getUserId, getUserSession } from "~/utils/auth.server";
+import { useContacts } from "~/utils/live-update";
 
 type LoaderData = {
   userId: string;
@@ -70,33 +71,6 @@ export const action: ActionFunction = async ({ request }) => {
   return json({ success: true });
 };
 
-export function useFileChanges(url: string, onUpdate: (changes: any[]) => void) {
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const ws = new WebSocket(url);
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'fileUpdate') {
-        onUpdate(data.changes);
-      } else if (data.type === 'initialContacts') {
-        onUpdate(data.contacts);
-      }
-    };
-
-    ws.onerror = (event) => {
-      setError('WebSocket error');
-      console.error('WebSocket error:', event);
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, [url, onUpdate]);
-
-  return { error };
-}
 
 export default function GOTVCampaign() {
   const {
@@ -105,23 +79,8 @@ export default function GOTVCampaign() {
     campaign,
     contacts: initialContacts,
   } = useLoaderData<LoaderData>();
-  const [contacts, setContacts] = useState(initialContacts);
   const fetcher = useFetcher();
-
-  const handleUpdate = useCallback((updatedContacts) => {
-    setContacts((prevContacts) => {
-      const contactMap = new Map(prevContacts.map(c => [c.id, c]));
-      updatedContacts.forEach(contact => {
-        if (contact.deleted) {
-          contactMap.delete(contact.id);
-        } else {
-          contactMap.set(contact.id, { ...contactMap.get(contact.id), ...contact });
-        }
-      });
-      return Array.from(contactMap.values());
-    });
-  }, []);
-
+  const {contacts, setContacts, handleUpdate} = useContacts({initialContacts}); 
   const { error } = useFileChanges(`ws://localhost:5173?sessionId=${userId}`, handleUpdate);
 
   useEffect(() => {

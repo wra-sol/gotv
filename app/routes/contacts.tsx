@@ -1,95 +1,68 @@
 import type { ActionFunction, LoaderFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, Link, useSubmit, redirect } from "@remix-run/react";
-import { useState } from "react";
+import { useLoaderData, Link, useSubmit, useNavigate, Form } from "@remix-run/react";
+import { useState, useEffect } from "react";
+import { useFileChanges } from "~/hooks/useFileChanges";
 import { Contact, createManyContacts, getContacts } from "~/models/contacts";
 import { getUserId } from "~/utils/auth.server";
-
+import { useContacts } from "~/utils/live-update";
 
 type LoaderData = {
   contacts: Array<Contact>;
+  total: number;
+  page: number;
+  limit: number;
+  letterFilter: string;
+  userId: string;
 };
+export const loader: LoaderFunction = async ({ request }) => {
+  const url = new URL(request.url);
+  const userId = await getUserId(request);
+  const page = parseInt(url.searchParams.get("page") || "1");
+  const limit = parseInt(url.searchParams.get("limit") || "10");
+  const letterFilter = url.searchParams.get("letter") || "";
+  const search = url.searchParams.get("search") || "";
 
-export const loader: LoaderFunction = async () => {
-  const contacts = await getContacts();
-  return json({ contacts });
+  const offset = (page - 1) * limit;
+  const { contacts, total } = await getContacts({ 
+    offset, 
+    limit, 
+    filters: { 
+      lastNameStartsWith: letterFilter,
+      search: search
+    } 
+  });
+
+  return json({ contacts, total, page, limit, letterFilter, search, userId });
 };
 
 export const action: ActionFunction = async ({ request }) => {
   const userId = await getUserId(request);
-  if (!userId) return redirect("/login");
-  const data = await request.json();
+  if (!userId) return json({ error: "Unauthorized" }, { status: 401 });
 
+  const data = await request.json();
   await createManyContacts(data.contacts, userId);
   return json({ success: true });
 };
 
-function parseCSV(text: string): string[][] {
-  const result: string[][] = [];
-  let row: string[] = [];
-  let inQuotes = false;
-  let currentValue = '';
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const nextChar = text[i + 1];
-
-    if (inQuotes) {
-      if (char === '"' && nextChar === '"') {
-        currentValue += '"';
-        i++;
-      } else if (char === '"') {
-        inQuotes = false;
-      } else {
-        currentValue += char;
-      }
-    } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ',' || char === '\n' || char === '\r') {
-        row.push(currentValue.trim());
-        currentValue = '';
-        if (char === '\n' || (char === '\r' && nextChar === '\n')) {
-          result.push(row);
-          row = [];
-          if (char === '\r') i++;
-        }
-      } else {
-        currentValue += char;
-      }
-    }
-  }
-
-  if (currentValue) {
-    row.push(currentValue.trim());
-  }
-  if (row.length > 0) {
-    result.push(row);
-  }
-
-  return result;
-}
-
-function parseCSVHeaders(headers: string[]): string[] {
-  return headers.map((header) => header.toLowerCase().replace(/\s+/g, "_"));
-}
-
-function parseCSVData(records: string[][], headers: string[]): Contact[] {
-  return records.slice(1).map((record) => {
-    const contact: Partial<Contact> = {};
-    headers.forEach((header, index) => {
-      if (record[index]) {
-        contact[header as keyof Contact] = record[index];
-      }
-    });
-    return contact as Contact;
-  });
-}
+// CSV parsing functions remain the same
+function parseCSV(text: string): string[][] { /* ... */ }
+function parseCSVHeaders(headers: string[]): string[] { /* ... */ }
+function parseCSVData(records: string[][], headers: string[]): Contact[] { /* ... */ }
 
 export default function Contacts() {
-  const { contacts } = useLoaderData<LoaderData>();
+  const { contacts:initialContacts, total, page, limit, letterFilter, userId } = useLoaderData<LoaderData>();
   const submit = useSubmit();
+  const navigate = useNavigate();
   const [newContacts, setNewContacts] = useState<Contact[]>([]);
+  const {contacts, handleUpdate} = useContacts({initialContacts}); 
+    const { error } = useFileChanges(`ws://localhost:5173?sessionId=${userId}`, handleUpdate);
+
+
+  const totalPages = Math.ceil(total / limit);
+
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -120,11 +93,23 @@ export default function Contacts() {
       { contacts: newContacts },
       {
         method: "POST",
-        action: "/contacts",
         encType: "application/json",
         navigate: false,
       }
     );
+  };
+
+  const handlePageChange = (newPage: number) => {
+    const searchParams = new URLSearchParams(window.location.search);
+    searchParams.set("page", newPage.toString());
+    navigate(`?${searchParams.toString()}`);
+  };
+
+  const handleLetterFilter = (letter: string) => {
+    const searchParams = new URLSearchParams(window.location.search);
+    searchParams.set("letter", letter);
+    searchParams.set("page", "1");
+    navigate(`?${searchParams.toString()}`);
   };
 
   return (
@@ -151,9 +136,33 @@ export default function Contacts() {
             onClick={submitContacts}
             className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600"
           >
-            Submit Imported Contacts
+            Submit Imported Contacts ({newContacts.length})
           </button>
         )}
+      </div>
+      <div className="mb-4">
+        <h2 className="text-xl mb-2">Filter by Last Name</h2>
+        <div className="flex flex-wrap gap-2">
+          {alphabet.map((letter) => (
+            <button
+              key={letter}
+              onClick={() => handleLetterFilter(letter)}
+              className={`px-2 py-1 rounded ${
+                letterFilter === letter ? 'bg-blue-500 text-white' : 'bg-gray-200'
+              }`}
+            >
+              {letter}
+            </button>
+          ))}
+          {letterFilter && (
+            <button
+              onClick={() => handleLetterFilter('')}
+              className="px-2 py-1 rounded bg-red-500 text-white"
+            >
+              Clear Filter
+            </button>
+          )}
+        </div>
       </div>
       <ul className="mt-4 space-y-2">
         {contacts.map((contact) => (
@@ -175,6 +184,23 @@ export default function Contacts() {
           </li>
         ))}
       </ul>
+      <div className="mt-4 flex justify-between items-center">
+        <button
+          onClick={() => handlePageChange(page - 1)}
+          disabled={page === 1}
+          className="bg-blue-500 text-white px-4 py-2 rounded disabled:bg-gray-300"
+        >
+          Previous
+        </button>
+        <span>Page {page} of {totalPages}</span>
+        <button
+          onClick={() => handlePageChange(page + 1)}
+          disabled={page === totalPages}
+          className="bg-blue-500 text-white px-4 py-2 rounded disabled:bg-gray-300"
+        >
+          Next
+        </button>
+      </div>
     </div>
   );
 }

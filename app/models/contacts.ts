@@ -15,6 +15,9 @@ export interface Contact {
   external_id?: string;
   electoral_district?: string;
   poll_id?: string;
+  last_contacted: string;
+  last_contacted_by: string;
+  ride_status: string;
   voted: boolean;
   created_at: Date;
   created_by: number;
@@ -36,6 +39,9 @@ const contactColumns = [
   'electoral_district',
   'poll_id',
   'voted',
+  'ride_status',
+  'last_contacted',
+  'last_contacted_by',
   'created_by',
   'updated_by'
 ];
@@ -45,21 +51,80 @@ function sanitizeContactData(contact: Partial<Contact>): Partial<Contact> {
     Object.entries(contact).filter(([key]) => contactColumns.includes(key))
   ) as Partial<Contact>;
 }
-
-export async function getContacts(): Promise<Contact[]> {
+export async function getContacts({ 
+  offset = 0, 
+  limit = 10, 
+  filters 
+}: { 
+  offset?: number, 
+  limit?: number, 
+  filters: {
+    search?: string,
+    rideStatus?: string,
+    voted?: string,
+    electoralDistrict?: string,
+    pollId?: string,
+    lastNameStartsWith?: string
+  }
+} = { filters: {} }): Promise<{ contacts: Contact[], total: number }> {
   const db = await getDb();
-  return db.all("SELECT * FROM contacts ORDER BY created_at ASC");
-}
+  
+  let whereClause = [];
+  let params = [];
+  
+  if (filters.search) {
+    whereClause.push("(firstname LIKE ? OR surname LIKE ? OR email LIKE ? OR phone LIKE ?)");
+    params.push(`%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`);
+  }
+  
+  if (filters.rideStatus) {
+    whereClause.push("ride_status = ?");
+    params.push(filters.rideStatus);
+  }
+  
+  if (filters.voted) {
+    whereClause.push("voted = ?");
+    params.push(filters.voted === 'true' ? 1 : 0);
+  }
+  
+  if (filters.electoralDistrict) {
+    whereClause.push("electoral_district = ?");
+    params.push(filters.electoralDistrict);
+  }
+  
+  if (filters.pollId) {
+    whereClause.push("poll_id = ?");
+    params.push(filters.pollId);
+  }
 
+  if (filters.lastNameStartsWith) {
+    whereClause.push("surname LIKE ?");
+    params.push(`${filters.lastNameStartsWith}%`);
+  }
+  
+  const whereString = whereClause.length > 0 ? `WHERE ${whereClause.join(" AND ")}` : "";
+  
+  const contacts = await db.all(
+    `SELECT * FROM contacts ${whereString} ORDER BY surname ASC, firstname ASC LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+  
+  const [{ total }] = await db.all(
+    `SELECT COUNT(*) as total FROM contacts ${whereString}`,
+    params
+  );
+  
+  return { contacts, total };
+}
 export async function getContactById(id: number): Promise<Contact | undefined> {
   const db = await getDb();
   return db.get("SELECT * FROM contacts WHERE id = ?", id);
 }
 
-export async function getUniqueGroupingValues(groupingField: string): Promise<string[]> {
+export async function getUniqueGroupingValues(field: string): Promise<string[]> {
   const db = await getDb();
-  const result = await db.all(`SELECT DISTINCT ${groupingField} FROM contacts WHERE ${groupingField} IS NOT NULL AND ${groupingField} != ''`);
-  return result.map(row => row[groupingField]);
+  const result = await db.all(`SELECT DISTINCT ${field} FROM contacts WHERE ${field} IS NOT NULL AND ${field} != '' ORDER BY ${field} ASC`);
+  return result.map(row => row[field]);
 }
 
 export async function getContactsByGroupingValue(groupingField: string, value: string): Promise<Contact[]> {
@@ -112,8 +177,7 @@ export async function createManyContacts(contacts: Omit<Contact, "id" | "created
 
   return insertedIds;
 }
-
-export async function updateContact(id: number, contact: Partial<Omit<Contact, "id" | "created_at" | "created_by" | "updated_at">>, userId: number): Promise<void> {
+export async function updateContact(id: number, contact: Partial<Contact>, userId: number): Promise<void> {
   const db = await getDb();
   const sanitizedContact = sanitizeContactData(contact);
   const entries = Object.entries(sanitizedContact);
@@ -121,7 +185,7 @@ export async function updateContact(id: number, contact: Partial<Omit<Contact, "
   const values = entries.map(([_, value]) => value);
   
   await db.run(
-    `UPDATE contacts SET ${setClause}, updated_by = ? WHERE id = ?`,
+    `UPDATE contacts SET ${setClause}, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     [...values, userId, id]
   );
 }
