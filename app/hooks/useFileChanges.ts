@@ -15,14 +15,12 @@ export const useFileChanges = (socketUrl, userId) => {
       };
 
       ws.onmessage = (event) => {
+        console.log(event)
         try {
           const data = JSON.parse(event.data);
-          console.log(data)
-          if (data.type === "fileUpdate" || data.type === "initialContent") {
-            setFileContent(data.contacts);
-          }
-        } catch (err) {
-          console.error("Error processing WebSocket message:", err);
+          console.log(data);
+        } catch (error) {
+          setError(error);
         }
       };
 

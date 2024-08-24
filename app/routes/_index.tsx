@@ -1,48 +1,99 @@
-import { redirect, useLoaderData } from "@remix-run/react";
+import { redirect, useLoaderData, Link } from "@remix-run/react";
 import type { LoaderFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { getUser } from "~/utils/auth.server";
-import { checkInitialized } from "~/utils/db";
+import { checkInitialized, initializeDatabase } from "~/utils/db";
+import { getContacts } from "~/models/contacts";
+import { getSettings } from "~/models/settings";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const isInitialized = await checkInitialized();
   if (!isInitialized) {
-    return redirect("/setup");
+    initializeDatabase({
+      user: process.env.DB_USER!,
+      host: process.env.DB_HOST!,
+      database: process.env.DB_NAME!,
+      password: process.env.DB_PASSWORD!,
+      port: parseInt(process.env.DB_PORT || "5432", 10)!,
+    });
   }
 
   const user = await getUser(request);
-  return json({ user });
+  if (!user) {
+    return redirect("/login");
+  }
+
+  const [contactCount, settings] = await Promise.all([
+    getContacts({ limit: 1 }).then((result) => result.total),
+    getSettings(),
+  ]);
+
+  return json({ user, contactCount, settings });
 };
 
 export default function Index() {
-  const { user } = useLoaderData<typeof loader>();
+  const { user, contactCount, settings } = useLoaderData<typeof loader>();
 
   return (
     <div className="max-w-4xl mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6">Welcome to Your Application</h1>
-      
-      {user ? (
-        <p className="mb-4">Hello, {user.username}! Welcome back.</p>
-      ) : (
-        <p className="mb-4">Please sign in to access all features.</p>
-      )}
+      <h1 className="text-3xl font-bold mb-6">
+        Welcome to {settings.name || "Your Application"}
+      </h1>
+
+      <p className="mb-4">Hello, {user.username}! Welcome back.</p>
 
       <section className="mb-8">
-        <h2 className="text-2xl font-semibold mb-3">About This Application</h2>
-        <p>
-          This is a powerful tool designed to help you manage contacts and user information efficiently. 
-          Navigate through the sidebar to explore different features.
-        </p>
+        <h2 className="text-2xl font-semibold mb-3">Dashboard</h2>
+        <div className="bg-white shadow rounded-lg p-6">
+          <p className="text-lg mb-2">
+            You currently have <span className="font-bold">{contactCount}</span>{" "}
+            contacts in your database.
+          </p>
+          <Link to="/contacts" className="text-blue-600 hover:underline">
+            Manage Contacts
+          </Link>
+        </div>
       </section>
 
-      <section>
-        <h2 className="text-2xl font-semibold mb-3">Quick Links</h2>
-        <ul className="list-disc list-inside">
-          <li>Manage your contacts</li>
-          <li>View and edit user profiles</li>
-          <li>Adjust application settings</li>
-        </ul>
+      <section className="mb-8">
+        <h2 className="text-2xl font-semibold mb-3">Quick Actions</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <Link
+            to="/contacts/new"
+            className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 text-center"
+          >
+            Add New Contact
+          </Link>
+          <Link
+            to="/settings"
+            className="bg-gray-200 text-gray-800 py-2 px-4 rounded hover:bg-gray-300 text-center"
+          >
+            Adjust Settings
+          </Link>
+        </div>
       </section>
+
+      {user.is_owner && (
+        <section>
+          <h2 className="text-2xl font-semibold mb-3">Admin Actions</h2>
+          <div
+            className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4"
+            role="alert"
+          >
+            <p className="font-bold">Owner Access</p>
+            <p>
+              You have owner privileges. You can manage users and system
+              settings.
+            </p>
+            <Link
+              to="/users"
+              className="text-yellow-700 font-bold hover:underline"
+            >
+              Manage Users
+            </Link>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

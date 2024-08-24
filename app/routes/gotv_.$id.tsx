@@ -8,9 +8,9 @@ import {
 } from "~/models/contacts";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { getLastChangeId, pollForChanges } from "~/models/live";
-import { useFileChanges } from "~/hooks/useFileChanges";
-import { getUserId, getUserSession } from "~/utils/auth.server";
+import { getUserId } from "~/utils/auth.server";
 import { useContacts } from "~/utils/live-update";
+import { useFileChanges } from "~/hooks/useFileChanges";
 
 type LoaderData = {
   userId: string;
@@ -37,7 +37,7 @@ export const loader: LoaderFunction = async ({ params, request }) => {
   if (!userId) {
     return redirect("/login");
   }
-
+console.log(userId)
   const url = new URL(request.url);
   const lastKnownChangeId = Number(url.searchParams.get("lastChangeId") || "0");
 
@@ -45,16 +45,12 @@ export const loader: LoaderFunction = async ({ params, request }) => {
     groupingField,
     decodeURIComponent(campaign)
   );
-  const lastChangeId = await getLastChangeId();
-  const changes = await pollForChanges(lastKnownChangeId);
 
   return json({
     userId,
     groupingField,
     campaign: decodeURIComponent(campaign),
     contacts,
-    lastChangeId,
-    hasChanges: changes.length > 0,
   });
 };
 
@@ -81,14 +77,7 @@ export default function GOTVCampaign() {
   } = useLoaderData<LoaderData>();
   const fetcher = useFetcher();
   const {contacts, setContacts, handleUpdate} = useContacts({initialContacts}); 
-  const { error } = useFileChanges(`ws://localhost:5173?sessionId=${userId}`, handleUpdate);
-
-  useEffect(() => {
-    if (error) {
-      console.error("WebSocket error:", error);
-      // Implement error handling (e.g., show an error message to the user)
-    }
-  }, [error]);
+  const {fileContent, error} = useFileChanges('http://localhost:5173', userId)
 
   const handleVotedToggle = (
     contactId: number,

@@ -1,14 +1,14 @@
-import { parse, ParseResult } from "csv-parse/sync";
+//import { parse } from "csv-parse/sync";
 import { Contact } from "~/models/contacts";
 
-export const parser = (text: string): string[][] => {
+/* export const parser = (text: string): string[][] => {
   try {
     return parse(text) as string[][];
   } catch (error) {
     console.error("Error parsing CSV:", error);
     throw new Error("Failed to parse CSV file. Please check the file format and try again.");
   }
-};
+}; */
 
 export const parseCSVHeaders = (unparsedHeaders: string[]): string[] => {
   return unparsedHeaders.map((header) => header.toLowerCase().trim());
@@ -93,3 +93,49 @@ export const parseCSVData = (data: string[][], parsedHeaders: string[]): Partial
     return contact;
   });
 };
+
+export function parseCSV(text: string): string[][] {
+  const result: string[][] = [];
+  let row: string[] = [];
+  let inQuotes = false;
+  let currentValue = '';
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentValue += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentValue += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',' || char === '\n' || char === '\r') {
+        row.push(currentValue.trim());
+        currentValue = '';
+        if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+          result.push(row);
+          row = [];
+          if (char === '\r') i++;
+        }
+      } else {
+        currentValue += char;
+      }
+    }
+  }
+
+  if (currentValue) {
+    row.push(currentValue.trim());
+  }
+  if (row.length > 0) {
+    result.push(row);
+  }
+
+  return result;
+}

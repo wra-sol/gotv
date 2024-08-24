@@ -1,41 +1,89 @@
-import { useState } from "react";
-import type { ActionFunction } from "@remix-run/node";
+import type { ActionFunction, LoaderFunction } from "@remix-run/node";
 import { json, redirect } from "@remix-run/node";
 import { Form, useActionData } from "@remix-run/react";
 import { checkInitialized, initializeDatabase } from "~/utils/db";
-import { createUserSession, login } from "~/utils/auth.server";
+import { createUserSession, getUser, login } from "~/utils/auth.server";
+import { getContacts } from "~/models/contacts";
+import { getSettings } from "~/models/settings";
 
 export const action: ActionFunction = async ({ request }) => {
   const formData = await request.formData();
   const ownerUsername = formData.get("ownerUsername");
   const ownerPassword = formData.get("ownerPassword");
-  const dbType = formData.get("dbType");
+  const pgHost = formData.get("pgHost");
+  const pgPort = formData.get("pgPort");
+  const pgDatabase = formData.get("pgDatabase");
+  const pgUser = formData.get("pgUser");
+  const pgPassword = formData.get("pgPassword");
 
-  if (
-    typeof ownerUsername !== "string" ||
-    typeof ownerPassword !== "string" ||
-    typeof dbType !== "string"
-  ) {
-    return json({ error: "Invalid form data" }, { status: 400 });
+  const errors: Record<string, string> = {};
+  if (typeof ownerUsername !== "string" || ownerUsername.length < 3) {
+    errors.ownerUsername = "Username must be at least 3 characters long";
   }
+  if (typeof ownerPassword !== "string" || ownerPassword.length < 8) {
+    errors.ownerPassword = "Password must be at least 8 characters long";
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return json({ errors }, { status: 400 });
+  }
+
   const isInitialized = await checkInitialized();
   if (isInitialized) {
     return redirect("/");
   }
 
   try {
-    await initializeDatabase({ ownerUsername, ownerPassword, dbType });
-    const user = await login({ username: ownerUsername, password: ownerPassword });
+    await initializeDatabase({
+      host: pgHost as string,
+      port: parseInt(pgPort as string, 10),
+      database: pgDatabase as string,
+      user: pgUser as string,
+      password: pgPassword as string,
+    });
+
+    const user = await login({
+      username: ownerUsername as string,
+      password: ownerPassword as string,
+    });
+    if (!user) {
+      throw new Error("Failed to create owner user");
+    }
+
     return createUserSession(user.id, "/");
   } catch (error) {
-    return json({ error: "Failed to initialize database" }, { status: 500 });
+    console.error("Failed to initialize database:", error);
+    return json({ error: "Failed to initialize database. Please check your inputs and try again." }, { status: 500 });
+  }
+};
+
+export const loader: LoaderFunction = async ({ request }) => {
+  const isInitialized = await checkInitialized();
+  if (isInitialized) {
+    return redirect("/");
+  }
+
+  const user = await getUser(request);
+  if (!user) {
+    return redirect("/login");
+  }
+
+  try {
+    const [{ contacts, total }, settings] = await Promise.all([
+      getContacts({ limit: 10 }),
+      getSettings(),
+    ]);
+
+    return json({ user, contactCount: total, settings });
+  } catch (error) {
+    console.error("Error loading data:", error);
+    return json({ user, contactCount: 0, settings: {} }, { status: 500 });
   }
 };
 
 export default function Setup() {
   const actionData = useActionData<typeof action>();
-  const [dbType, setDbType] = useState("sqlite");
-  
+
   return (
     <div className="font-sans p-4">
       <h1 className="text-3xl mb-4">Set up Your New Instance</h1>
@@ -65,54 +113,66 @@ export default function Setup() {
           />
         </div>
         <div>
-          <label htmlFor="dbType" className="block mb-1">
-            Database Type:
+          <label htmlFor="pgHost" className="block mb-1">
+            PostgreSQL Host:
           </label>
-          <select
-            id="dbType"
-            name="dbType"
-            value={dbType}
-            onChange={(e) => setDbType(e.target.value)}
+          <input
+            type="text"
+            id="pgHost"
+            name="pgHost"
+            required
             className="w-full p-2 border rounded"
-          >
-            <option value="sqlite">SQLite</option>
-            <option value="postgres">PostgreSQL</option>
-          </select>
+          />
         </div>
-        {dbType === "postgres" && (
-          <div className="space-y-2">
-            <input
-              type="text"
-              name="pgHost"
-              placeholder="PostgreSQL Host"
-              className="w-full p-2 border rounded"
-            />
-            <input
-              type="text"
-              name="pgPort"
-              placeholder="PostgreSQL Port"
-              className="w-full p-2 border rounded"
-            />
-            <input
-              type="text"
-              name="pgDatabase"
-              placeholder="PostgreSQL Database Name"
-              className="w-full p-2 border rounded"
-            />
-            <input
-              type="text"
-              name="pgUser"
-              placeholder="PostgreSQL Username"
-              className="w-full p-2 border rounded"
-            />
-            <input
-              type="password"
-              name="pgPassword"
-              placeholder="PostgreSQL Password"
-              className="w-full p-2 border rounded"
-            />
-          </div>
-        )}
+        <div>
+          <label htmlFor="pgPort" className="block mb-1">
+            PostgreSQL Port:
+          </label>
+          <input
+            type="number"
+            id="pgPort"
+            name="pgPort"
+            required
+            defaultValue="5432"
+            className="w-full p-2 border rounded"
+          />
+        </div>
+        <div>
+          <label htmlFor="pgDatabase" className="block mb-1">
+            PostgreSQL Database Name:
+          </label>
+          <input
+            type="text"
+            id="pgDatabase"
+            name="pgDatabase"
+            required
+            className="w-full p-2 border rounded"
+          />
+        </div>
+        <div>
+          <label htmlFor="pgUser" className="block mb-1">
+            PostgreSQL Username:
+          </label>
+          <input
+            type="text"
+            id="pgUser"
+            name="pgUser"
+            required
+            className="w-full p-2 border rounded"
+          />
+        </div>
+        <div>
+          <label htmlFor="pgPassword" className="block mb-1">
+            PostgreSQL Password:
+          </label>
+          <input
+            type="password"
+            id="pgPassword"
+            name="pgPassword"
+            required
+            className="w-full p-2 border rounded"
+          />
+        </div>
         <button
           type="submit"
           className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600"

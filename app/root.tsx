@@ -64,17 +64,23 @@ export default function App() {
                       Contacts
                     </Link>
                   </li>
+
+                  <li>
+                    <Link to="/gotv" className="text-blue-600 hover:underline">
+                      GOTV Campaigns
+                    </Link>
+                  </li>
+                  <li>
+                    <Link to="/dispatch" className="text-blue-600 hover:underline">
+                      Dispatch
+                    </Link>
+                  </li>
                   <li>
                     <Link
                       to="/settings"
                       className="text-blue-600 hover:underline"
                     >
                       Settings
-                    </Link>
-                  </li>
-                  <li>
-                    <Link to="/gotv" className="text-blue-600 hover:underline">
-                      GOTV Campaigns
                     </Link>
                   </li>
                   <li>

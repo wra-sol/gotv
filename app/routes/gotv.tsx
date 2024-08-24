@@ -7,24 +7,29 @@ import { getUniqueGroupingValues } from "~/models/contacts";
 type LoaderData = {
   groupingField: string;
   campaigns: string[];
+  error?:Error
 };
 
 export const loader: LoaderFunction = async () => {
   const settings = await getSettings();
+  if (!settings.grouping_field){
+    return ({groupingField:null, campaigns:null, error:new Error("Campaigns not configured")})
+  }
   const groupingField = settings.grouping_field;
   const campaigns = await getUniqueGroupingValues(groupingField);
-  return json({ groupingField, campaigns });
+  return json({ groupingField, campaigns, error:null });
 };
 
 export default function GOTV() {
-  const { groupingField, campaigns } = useLoaderData<LoaderData>();
+  const { groupingField, campaigns, error } = useLoaderData<LoaderData>();
 
   return (
     <div className="font-sans p-4">
       <h1 className="text-3xl mb-4">Get Out The Vote Campaigns</h1>
+      {error && error.message}
       <p className="mb-4">Campaigns grouped by: {groupingField}</p>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {campaigns.map((campaign) => (
+        {campaigns?.map((campaign) => (
           <Link
             key={campaign}
             to={`/gotv/${encodeURIComponent(campaign)}`}

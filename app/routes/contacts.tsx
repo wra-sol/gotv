@@ -1,10 +1,18 @@
 import type { ActionFunction, LoaderFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData, Link, useSubmit, useNavigate, Form } from "@remix-run/react";
-import { useState, useEffect } from "react";
+import {
+  useLoaderData,
+  Link,
+  useSubmit,
+  useNavigate,
+  useSearchParams,
+  Form,
+} from "@remix-run/react";
+import { useEffect, useState } from "react";
 import { useFileChanges } from "~/hooks/useFileChanges";
 import { Contact, createManyContacts, getContacts } from "~/models/contacts";
 import { getUserId } from "~/utils/auth.server";
+import { parseCSV, parseCSVData, parseCSVHeaders } from "~/utils/csvParser";
 import { useContacts } from "~/utils/live-update";
 
 type LoaderData = {
@@ -13,6 +21,7 @@ type LoaderData = {
   page: number;
   limit: number;
   letterFilter: string;
+  search: string;
   userId: string;
 };
 export const loader: LoaderFunction = async ({ request }) => {
@@ -24,16 +33,24 @@ export const loader: LoaderFunction = async ({ request }) => {
   const search = url.searchParams.get("search") || "";
 
   const offset = (page - 1) * limit;
-  const { contacts, total } = await getContacts({ 
-    offset, 
-    limit, 
-    filters: { 
+  const { contacts, total } = await getContacts({
+    offset,
+    limit,
+    filters: {
       lastNameStartsWith: letterFilter,
-      search: search
-    } 
+      search: search,
+    },
   });
 
-  return json({ contacts, total, page, limit, letterFilter, search, userId });
+  return json<LoaderData>({
+    contacts,
+    total,
+    page,
+    limit,
+    letterFilter,
+    search,
+    userId,
+  });
 };
 
 export const action: ActionFunction = async ({ request }) => {
@@ -45,23 +62,28 @@ export const action: ActionFunction = async ({ request }) => {
   return json({ success: true });
 };
 
-// CSV parsing functions remain the same
-function parseCSV(text: string): string[][] { /* ... */ }
-function parseCSVHeaders(headers: string[]): string[] { /* ... */ }
-function parseCSVData(records: string[][], headers: string[]): Contact[] { /* ... */ }
-
 export default function Contacts() {
-  const { contacts:initialContacts, total, page, limit, letterFilter, userId } = useLoaderData<LoaderData>();
+  const {
+    contacts: initialContacts,
+    total,
+    page,
+    limit,
+    letterFilter,
+    search,
+    userId,
+  } = useLoaderData<LoaderData>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { contacts, setContacts, handleUpdate } = useContacts({
+    initialContacts,
+  });
+  const [newContacts, setNewContacts] = useState([]);
+  const { error } = useFileChanges(`ws://localhost:5173`, userId);
   const submit = useSubmit();
   const navigate = useNavigate();
-  const [newContacts, setNewContacts] = useState<Contact[]>([]);
-  const {contacts, handleUpdate} = useContacts({initialContacts}); 
-    const { error } = useFileChanges(`ws://localhost:5173?sessionId=${userId}`, handleUpdate);
-
 
   const totalPages = Math.ceil(total / limit);
 
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -97,20 +119,41 @@ export default function Contacts() {
         navigate: false,
       }
     );
+    setNewContacts([]);
   };
 
   const handlePageChange = (newPage: number) => {
-    const searchParams = new URLSearchParams(window.location.search);
     searchParams.set("page", newPage.toString());
-    navigate(`?${searchParams.toString()}`);
+    setSearchParams(searchParams);
   };
 
   const handleLetterFilter = (letter: string) => {
-    const searchParams = new URLSearchParams(window.location.search);
     searchParams.set("letter", letter);
-    searchParams.set("page", "1");
-    navigate(`?${searchParams.toString()}`);
+    searchParams.delete("page");
+    searchParams.delete("search");
+    setSearchParams(searchParams);
   };
+
+  const handleSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const searchTerm = formData.get("search") as string;
+    searchParams.set("search", searchTerm);
+    searchParams.delete("page");
+    searchParams.delete("letter");
+    setSearchParams(searchParams);
+  };
+
+  const clearFilters = () => {
+    searchParams.delete("search");
+    searchParams.delete("letter");
+    searchParams.delete("page");
+    setSearchParams(searchParams);
+  };
+
+  useEffect(() => {
+    setContacts(initialContacts);
+  }, [initialContacts, setContacts]);
 
   return (
     <div className="font-sans p-4">
@@ -148,22 +191,39 @@ export default function Contacts() {
               key={letter}
               onClick={() => handleLetterFilter(letter)}
               className={`px-2 py-1 rounded ${
-                letterFilter === letter ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                letterFilter === letter
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-200"
               }`}
             >
               {letter}
             </button>
           ))}
-          {letterFilter && (
-            <button
-              onClick={() => handleLetterFilter('')}
-              className="px-2 py-1 rounded bg-red-500 text-white"
-            >
-              Clear Filter
-            </button>
-          )}
         </div>
       </div>
+      <Form onSubmit={handleSearch} className="mb-4">
+        <input
+          type="text"
+          name="search"
+          placeholder="Search contacts..."
+          defaultValue={search}
+          className="border p-2 rounded mr-2"
+        />
+        <button
+          type="submit"
+          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+        >
+          Search
+        </button>
+      </Form>
+      {(letterFilter || search) && (
+        <button
+          onClick={clearFilters}
+          className="mb-4 px-2 py-1 rounded bg-red-500 text-white"
+        >
+          Clear All Filters
+        </button>
+      )}
       <ul className="mt-4 space-y-2">
         {contacts.map((contact) => (
           <li key={contact.id} className="border p-2 rounded flex flex-col">
@@ -174,12 +234,8 @@ export default function Contacts() {
               {contact.firstname} {contact.surname}
             </Link>
             <span className="flex gap-2">
-              <span className="text-sm text-gray-500">
-                {contact.email}
-              </span>
-              <span className="text-sm text-gray-500">
-                {contact.phone}
-              </span>
+              <span className="text-sm text-gray-500">{contact.email}</span>
+              <span className="text-sm text-gray-500">{contact.phone}</span>
             </span>
           </li>
         ))}
@@ -192,7 +248,9 @@ export default function Contacts() {
         >
           Previous
         </button>
-        <span>Page {page} of {totalPages}</span>
+        <span>
+          Page {page} of {totalPages}
+        </span>
         <button
           onClick={() => handlePageChange(page + 1)}
           disabled={page === totalPages}

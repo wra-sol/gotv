@@ -4,22 +4,19 @@ import express from "express";
 import morgan from "morgan";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import fs from "fs";
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import { parse } from 'url';
+import { initializeDatabase, query, closePool, getClient } from "./dbServer.js"
 
 const isProduction = process.env.NODE_ENV === "production";
-const DB_PATH = 'database.sqlite';
-const FILE_TO_WATCH = 'database.sqlite-wal';
 
+// Vite setup for development
 const viteDevServer = isProduction
   ? undefined
   : await import("vite").then((vite) =>
-    vite.createServer({
-      server: { middlewareMode: true },
-    })
-  );
+      vite.createServer({
+        server: { middlewareMode: true },
+      })
+    );
 
 const remixHandler = createRequestHandler({
   build: viteDevServer
@@ -27,147 +24,137 @@ const remixHandler = createRequestHandler({
     : await import("./build/server/index.js"),
 });
 
-const app = express();
-
-app.use(compression());
-app.disable("x-powered-by");
-
-if (viteDevServer) {
-  app.use(viteDevServer.middlewares);
-} else {
-  app.use(
-    "/assets",
-    express.static("build/client/assets", { immutable: true, maxAge: "1y" })
-  );
-}
-
-app.use(express.static("build/client", { maxAge: "1h" }));
-
-app.use(morgan("tiny"));
-
-const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
-
-let db;
-
-const initDb = async () => {
-  console.log('Initializing database...');
-  db = await open({
-    filename: DB_PATH,
-    driver: sqlite3.Database
-  });
-  await db.run('PRAGMA journal_mode = WAL');
-  console.log('Database initialized successfully.');
-};
-
-const watchContacts = async (initialContacts, userId) => {
-  console.log(`Checking for contact changes for user ${userId}...`);
+const startServer = async () => {
   try {
-    const currentContacts = await db.all('SELECT * FROM contacts');
-    console.log(`Current contacts count for user ${userId}: ${currentContacts.length}`);
-
-    const changes = currentContacts.filter(contact => {
-      const initialContact = initialContacts?.find(ic => ic.id === contact.id);
-      return !initialContact || JSON.stringify(contact) !== JSON.stringify(initialContact);
+    var client = await initializeDatabase({
+      user: process.env.DB_USER,
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      port: parseInt(process.env.DB_PORT || '5432', 10),
     });
 
-    const deletedContacts = initialContacts?.filter(contact => 
-      !currentContacts.some(cc => cc.id === contact.id)
-    ).map(contact => ({ ...contact, deleted: true })) || [];
+    const app = express();
 
-    const allChanges = [...changes, ...deletedContacts];
+    app.use(compression());
+    app.disable("x-powered-by");
 
-    if (allChanges.length > 0) {
-      console.log(`Changes detected for user ${userId}:`, allChanges);
-      return allChanges;
+    // Serve static files
+    if (viteDevServer) {
+      app.use(viteDevServer.middlewares);
     } else {
-      console.log(`No changes detected for user ${userId}.`);
-      return [];
+      app.use(
+        "/assets",
+        express.static("build/client/assets", { immutable: true, maxAge: "1y" })
+      );
+      app.use(express.static("build/client", { maxAge: "1h" }));
     }
-  } catch (error) {
-    console.error(`Error in watchContacts for user ${userId}:`, error);
-    return [];
-  }
-};
 
-server.on('upgrade', async (request, socket, head) => {
-  console.log('WebSocket upgrade request received');
-  const { query } = parse(request.url, true);
-  const sessionId = query.sessionId;
+    app.use(morgan("tiny"));
 
-  if (!sessionId) {
-    console.log('WebSocket connection rejected: No session ID provided');
-    socket.destroy();
-    return;
-  }
+    const server = createServer(app);
+    const wss = new WebSocketServer({ noServer: true });
 
-  try {
-    console.log('User ID from auth:', sessionId);
-    const userId = sessionId;
-    if (userId) {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        ws.userId = userId;
-        console.log(`WebSocket connection established for user ${userId}`);
-        wss.emit('connection', ws, request);
-      });
-    } else {
-      console.log('WebSocket connection rejected: Invalid session');
-      socket.destroy();
-    }
-  } catch (error) {
-    console.error('Error during WebSocket upgrade:', error);
-    socket.destroy();
-  }
-});
+    server.on('upgrade', async (request, socket, head) => {
+      console.log('WebSocket upgrade request received');
+      const { query: queryParams } = parse(request.url, true);
+      const sessionId = queryParams.sessionId;
 
-wss.on('connection', async (ws) => {
-  console.log(`Client connected for user ${ws.userId}`);
-  let initialContacts;
-  try {
-    initialContacts = await db.all('SELECT * FROM contacts');
-    console.log(`Sending initial contacts for user ${ws.userId}. Count: ${initialContacts.length}`);
-    ws.send(JSON.stringify({
-      type: 'initialContacts',
-      contacts: initialContacts
-    }));
+      if (!sessionId) {
+        console.log('WebSocket connection rejected: No session ID provided');
+        socket.destroy();
+        return;
+      }
 
-    const watcher = fs.watch(FILE_TO_WATCH, async (eventType, filename) => {
-      console.log(eventType)
-      if (eventType === 'rename' || eventType === "change") {
-        console.log(`File ${filename} has been changed for user ${ws.userId}`);
-        const changes = await watchContacts(initialContacts, ws.userId);
-        if (changes.length > 0) {
-          ws.send(JSON.stringify({
-            type: 'fileUpdate',
-            changes: changes
-          }));
-          initialContacts = await db.all('SELECT * FROM contacts');
+      try {
+        console.log('User ID from auth:', sessionId);
+        const userId = sessionId;
+        if (userId) {
+          wss.handleUpgrade(request, socket, head, (ws) => {
+            (ws).userId = userId;
+            console.log(`WebSocket connection established for user ${userId}`);
+            wss.emit('connection', ws, request);
+          });
+        } else {
+          console.log('WebSocket connection rejected: Invalid session');
+          socket.destroy();
         }
+      } catch (error) {
+        console.error('Error during WebSocket upgrade:', error);
+        socket.destroy();
       }
     });
 
-    ws.on('error', (error) => {
-      console.error(`WebSocket error for user ${ws.userId}:`, error);
+    wss.on('connection', async (ws) => {
+      const userId = (ws).userId;
+      let client;
+      try {
+        client = await getClient(); 
+        const result = await query('SELECT * FROM contacts');
+        const initialContacts = result.rows;
+        console.log(`Sending initial contacts for user ${userId}. Count: ${initialContacts.length}`);
+        ws.send(JSON.stringify({
+          type: 'initialContacts',
+          contacts: initialContacts
+        }));
+    
+        await client.query('LISTEN contact_changes');
+        await client.query('LISTEN interaction_changes');
+    
+        const dbListener = (msg) => {
+          console.log(msg);
+          if (msg.channel === 'contact_changes') {
+            const change = JSON.parse(msg.payload);
+            ws.send(JSON.stringify({
+              type: 'contactUpdate',
+              change: change
+            }));
+          } else if (msg.channel === 'interaction_changes') {
+            const change = JSON.parse(msg.payload);
+            ws.send(JSON.stringify({
+              type: 'interactionUpdate',
+              change: change
+            }));
+          }
+        };
+        
+        client.on('notification', dbListener);
+    
+        ws.on('error', (error) => {
+          console.error(`WebSocket error for user ${userId}:`, error);
+        });
+    
+        ws.on('close', (code, reason) => {
+          console.log(`Client disconnected for user ${userId}. Code: ${code}, Reason: ${reason}`);
+          client.removeListener('notification', dbListener);
+          client.release();
+        });
+      } catch (error) {
+        console.error(`Error in WebSocket connection handler for user ${userId}:`, error);
+        if (client) client.release();
+      }
     });
 
-    ws.on('close', (code, reason) => {
-      console.log(`Client disconnected for user ${ws.userId}. Code: ${code}, Reason: ${reason}`);
-      watcher.close();
-    });
+    app.all("*", remixHandler);
+
+    const port = process.env.PORT || 5173;
+
+    server.listen(port, () =>
+      console.log(`Express server listening at http://localhost:${port}`)
+    );
   } catch (error) {
-    console.error(`Error in WebSocket connection handler for user ${ws.userId}:`, error);
+    console.error('Failed to start server:', error);
+    process.exit(1);
   }
-});
+};
 
-app.all("*", remixHandler);
+startServer();
 
-const port = process.env.PORT || 5173;
-
-initDb().then(() => {
-  server.listen(port, () =>
-    console.log(`Express server listening at http://localhost:${port}`)
-  );
-}).catch(err => {
-  console.error('Failed to initialize database:', err);
-  process.exit(1);
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+  await closePool();
+  process.exit(0);
 });

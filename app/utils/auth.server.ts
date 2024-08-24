@@ -1,8 +1,8 @@
 import { createCookieSessionStorage, redirect } from "@remix-run/node";
-import { db } from "./db";
+import { query } from "./db";
 import crypto from "crypto";
 
-type User = { id: number; username: string };
+type User = { id: number; username: string; is_owner: boolean };
 
 // Adjust these as needed for your application
 const sessionSecret = process.env.SESSION_SECRET;
@@ -22,18 +22,26 @@ const storage = createCookieSessionStorage({
   },
 });
 
-// Password hashing function using Web Crypto API
+// Password hashing function using crypto module
 async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Buffer.from(hash).toString('hex');
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+      if (err) reject(err);
+      resolve(salt + ':' + derivedKey.toString('hex'));
+    });
+  });
 }
 
 // Password verification function
 async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
-  const hashedInput = await hashPassword(password);
-  return hashedInput === hashedPassword;
+  return new Promise((resolve, reject) => {
+    const [salt, key] = hashedPassword.split(':');
+    crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+      if (err) reject(err);
+      resolve(key === derivedKey.toString('hex'));
+    });
+  });
 }
 
 export async function createUserSession(userId: number, redirectTo: string) {
@@ -78,8 +86,9 @@ export async function getUser(request: Request) {
   }
 
   try {
-    const user = await db.get("SELECT * FROM users WHERE id = ?", userId);
-    if (userId && !user){
+    const result = await query("SELECT id, username, is_owner FROM users WHERE id = $1", [userId]);
+    const user = result.rows[0];
+    if (userId && !user) {
       return logout(request);
     }
     return user;
@@ -103,19 +112,20 @@ export async function login({
 }: {
   username: string;
   password: string;
-}) {
-  const user = await db.get("SELECT * FROM users WHERE username = ?", username);
+}): Promise<User | null> {
+  const result = await query("SELECT * FROM users WHERE username = $1", [username]);
+  const user = result.rows[0];
   if (!user) return null;
   const isCorrectPassword = await verifyPassword(password, user.password);
   if (!isCorrectPassword) return null;
-  return { id: user.id, username };
+  return { id: user.id, username: user.username, is_owner: user.is_owner };
 }
 
-export async function createUser(username: string, password: string) {
+export async function createUser(username: string, password: string): Promise<User> {
   const hashedPassword = await hashPassword(password);
-  const result = await db.run(
-    "INSERT INTO users (username, password, is_owner) VALUES (?, ?, false)",
+  const result = await query(
+    "INSERT INTO users (username, password, is_owner) VALUES ($1, $2, false) RETURNING id, username, is_owner",
     [username, hashedPassword]
   );
-  return { id: result.lastID, username };
+  return result.rows[0];
 }

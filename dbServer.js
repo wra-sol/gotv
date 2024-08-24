@@ -1,21 +1,31 @@
 import pkg from "pg";
 const { Pool } = pkg;
 
-let pool: pkg.Pool;
+let pool;
 
-export async function initializeDatabase(config: {
-  host: string;
-  port: number;
-  database: string;
-  user: string;
-  password: string;
-}) {
+export async function initializeDatabase(config) {
   try {
+    if (!config || !config.user || !config.host || !config.database || !config.password || !config.port) {
+      throw new Error("Invalid database configuration");
+    }
+
     pool = new Pool(config);
 
     const client = await pool.connect();
     console.log("Successfully connected to the database");
     client.release();
+
+    if (!(await checkInitialized())) {
+      await createTables();
+      await createConstraints();
+      await createFunctions();
+      await createTriggers();
+      await createViews();
+      await createIndexes();
+      console.log("Database initialized successfully");
+    } else {
+      console.log("Database already initialized");
+    }
   } catch (err) {
     console.error("Failed to initialize the database", err);
     throw err;
@@ -92,31 +102,36 @@ async function createTables() {
 async function createConstraints() {
   const client = await pool.connect();
   try {
-    await client.query(`
-      ALTER TABLE users 
-        ADD CONSTRAINT IF NOT EXISTS fk_users_created_by 
-        FOREIGN KEY (created_by) REFERENCES users(id);
+    // Check if each constraint exists before adding it
+    const constraintsToCheck = [
+      { constraint: 'fk_users_created_by', table: 'users' },
+      { constraint: 'fk_users_updated_by', table: 'users' },
+      { constraint: 'fk_contacts_created_by', table: 'contacts' },
+      { constraint: 'fk_contacts_updated_by', table: 'contacts' },
+      { constraint: 'fk_interactions_contact_id', table: 'interactions' },
+      { constraint: 'fk_interactions_created_by', table: 'interactions' }
+    ];
 
-      ALTER TABLE users 
-        ADD CONSTRAINT IF NOT EXISTS fk_users_updated_by 
-        FOREIGN KEY (updated_by) REFERENCES users(id);
+    for (const { constraint, table } of constraintsToCheck) {
+      const res = await client.query(
+        `SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = $1 AND constraint_name = $2`,
+        [table, constraint]
+      );
 
-      ALTER TABLE contacts
-        ADD CONSTRAINT IF NOT EXISTS fk_contacts_created_by 
-        FOREIGN KEY (created_by) REFERENCES users(id);
+      if (res.rows.length === 0) {
+        try {
+          const foreignTable = constraint.includes('contacts') ? 'contacts' : 'users';
+          const foreignColumn = 'id';
+          await client.query(
+            `ALTER TABLE ${table} ADD CONSTRAINT ${constraint} FOREIGN KEY (${constraint.split('_')[2]}) REFERENCES ${foreignTable}(${foreignColumn});`
+          );
+        } catch (e) {
+          console.error(e)
+        }
+      }
+    }
 
-      ALTER TABLE contacts
-        ADD CONSTRAINT IF NOT EXISTS fk_contacts_updated_by 
-        FOREIGN KEY (updated_by) REFERENCES users(id);
 
-      ALTER TABLE interactions
-        ADD CONSTRAINT IF NOT EXISTS fk_interactions_contact_id 
-        FOREIGN KEY (contact_id) REFERENCES contacts(id);
-
-      ALTER TABLE interactions
-        ADD CONSTRAINT IF NOT EXISTS fk_interactions_created_by 
-        FOREIGN KEY (created_by) REFERENCES users(id);
-    `);
     console.log("Constraints created successfully");
   } catch (err) {
     console.error("Error creating constraints:", err);
@@ -125,6 +140,7 @@ async function createConstraints() {
     client.release();
   }
 }
+
 
 async function createFunctions() {
   const client = await pool.connect();
@@ -138,38 +154,6 @@ async function createFunctions() {
       END;
       $$ LANGUAGE plpgsql;
 
-      CREATE OR REPLACE FUNCTION contact_change() RETURNS TRIGGER AS $$
-      DECLARE
-        payload json;
-      BEGIN
-        payload = json_build_object(
-          'id', NEW.id,
-          'external_id', NEW.external_id,
-          'firstname', NEW.firstname,
-          'surname', NEW.surname,
-          'email', NEW.email,
-          'unit', NEW.unit,
-          'street_name', NEW.street_name,
-          'street_number', NEW.street_number,
-          'address', NEW.address
-          'city', NEW.city
-          'postal', NEW.postal
-          'phone', NEW.phone
-          'electoral_district', NEW.electoral_district
-          'poll_id', NEW.poll_id
-          'voted', NEW.voted
-          'ride_status', NEW.ride_status
-          'last_contacted', NEW.last_contacted
-          'last_contacted_by', NEW.last_contacted_by
-          'created_at', NEW.created_at
-          'created_by', NEW.created_by
-          'updated_at', NEW.updated_at
-          'updated_by', NEW.updated_by
-          );
-        PERFORM pg_notify('interaction_changes', payload::text);
-        RETURN NULL;
-      END;
-      $$ LANGUAGE plpgsql;
       CREATE OR REPLACE FUNCTION notify_interaction_change() RETURNS TRIGGER AS $$
       DECLARE
         payload json;
@@ -186,6 +170,39 @@ async function createFunctions() {
           'created_at', NEW.created_at
         );
         PERFORM pg_notify('interaction_changes', payload::text);
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION notify_contact_change() RETURNS TRIGGER AS $$
+      DECLARE
+        payload json;
+      BEGIN
+        payload = json_build_object(
+          'id', NEW.id,
+          'external_id', NEW.external_id,
+          'firstname', NEW.firstname,
+          'surname', NEW.surname,
+          'email', NEW.email,
+          'unit', NEW.unit,
+          'street_name', NEW.street_name,
+          'street_number', NEW.street_number,
+          'address', NEW.address,
+          'city', NEW.city,
+          'postal', NEW.postal,
+          'phone', NEW.phone,
+          'electoral_district', NEW.electoral_district,
+          'poll_id', NEW.poll_id,
+          'voted', NEW.voted,
+          'ride_status', NEW.ride_status,
+          'last_contacted', NEW.last_contacted,
+          'last_contacted_by', NEW.last_contacted_by,
+          'created_at', NEW.created_at,
+          'created_by', NEW.created_by,
+          'updated_at', NEW.updated_at,
+          'updated_by', NEW.updated_by
+        );
+        PERFORM pg_notify('contact_changes', payload::text);
         RETURN NULL;
       END;
       $$ LANGUAGE plpgsql;
@@ -221,6 +238,11 @@ async function createTriggers() {
       AFTER INSERT OR UPDATE ON interactions
       FOR EACH ROW
       EXECUTE FUNCTION notify_interaction_change();
+      
+      CREATE TRIGGER contact_change_trigger
+      AFTER INSERT OR UPDATE ON contacts
+      FOR EACH ROW
+      EXECUTE FUNCTION notify_contact_change();
     `);
     console.log("Triggers created successfully");
   } catch (err) {
@@ -279,11 +301,17 @@ async function createIndexes() {
   }
 }
 
-export async function getClient(): Promise<pkg.PoolClient> {
+export async function getClient() {
+  if (!pool) {
+    throw new Error("Database not initialized. Call initializeDatabase first.");
+  }
   return await pool.connect();
 }
 
-export async function query(text: string, params?: any[]) {
+export async function query(text, params) {
+  if (!pool) {
+    throw new Error("Database not initialized. Call initializeDatabase first.");
+  }
   const client = await pool.connect();
   try {
     return await client.query(text, params);
@@ -292,20 +320,18 @@ export async function query(text: string, params?: any[]) {
   }
 }
 
-export async function checkInitialized(): Promise<boolean> {
+export async function checkInitialized() {
   try {
-    if (!pool) {
-      console.log('Hello')
-      return false;
-    }
     const result = await query("SELECT to_regclass('public.users') as exists");
     return !!result.rows[0].exists;
   } catch (error) {
-    console.error("Error checking if database is initialized:", error);
+    console.error("Error checking if 'users' table exists in database initialization check:", error);
     return false;
   }
 }
 
 export async function closePool() {
-  await pool.end();
+  if (pool) {
+    await pool.end();
+  }
 }
