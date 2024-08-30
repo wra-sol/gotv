@@ -235,7 +235,6 @@ export default function Canvass() {
       { changes: JSON.stringify(changes) },
       { method: "post", encType: "application/json" }
     );
-    // Clear changes after submitting
     setChanges([]);
   }, [changes, fetcher]);
 

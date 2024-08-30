@@ -100,6 +100,36 @@ async function createTables() {
         FOREIGN KEY (field_id) REFERENCES custom_fields(id),
         UNIQUE (interaction_id, field_id)
       );
+      
+      CREATE TABLE IF NOT EXISTS canvass_lists (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        created_by INTEGER REFERENCES users(id),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS canvass_list_rules (
+        id SERIAL PRIMARY KEY,
+        canvass_list_id INTEGER REFERENCES canvass_lists(id),
+        field_name TEXT NOT NULL,
+        operator TEXT NOT NULL,
+        value TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS canvass_list_contacts (
+        id SERIAL PRIMARY KEY,
+        canvass_list_id INTEGER REFERENCES canvass_lists(id),
+        contact_id INTEGER REFERENCES contacts(id),
+        added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        added_by INTEGER REFERENCES users(id),
+        UNIQUE(canvass_list_id, contact_id)
+      );
+
     `);
     console.log("Tables created successfully");
   } catch (err) {
@@ -348,7 +378,17 @@ async function createIndexes() {
 
       CREATE INDEX IF NOT EXISTS idx_custom_fields_section
       ON custom_fields(section);
+      
+      CREATE INDEX IF NOT EXISTS idx_canvass_list_rules_canvass_list_id
+      ON canvass_list_rules(canvass_list_id);
+
+      CREATE INDEX IF NOT EXISTS idx_canvass_list_contacts_canvass_list_id
+      ON canvass_list_contacts(canvass_list_id);
+
+      CREATE INDEX IF NOT EXISTS idx_canvass_list_contacts_contact_id
+      ON canvass_list_contacts(contact_id);
     `);
+
     console.log("Indexes created successfully");
   } catch (err) {
     console.error("Error creating indexes:", err);
