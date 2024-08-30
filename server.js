@@ -5,7 +5,7 @@ import morgan from "morgan";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { parse } from 'url';
-import { initializeDatabase, query, closePool, getClient } from "./dbServer.js"
+import { initializeDatabase, query, closePool, getClient, checkInitialized, initializeDatabaseStructure } from "./dbServer.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -13,10 +13,10 @@ const isProduction = process.env.NODE_ENV === "production";
 const viteDevServer = isProduction
   ? undefined
   : await import("vite").then((vite) =>
-      vite.createServer({
-        server: { middlewareMode: true },
-      })
-    );
+    vite.createServer({
+      server: { middlewareMode: true },
+    })
+  );
 
 const remixHandler = createRequestHandler({
   build: viteDevServer
@@ -26,14 +26,17 @@ const remixHandler = createRequestHandler({
 
 const startServer = async () => {
   try {
-    var client = await initializeDatabase({
-      user: process.env.DB_USER,
-      host: process.env.DB_HOST,
-      database: process.env.DB_NAME,
-      password: process.env.DB_PASSWORD,
-      port: parseInt(process.env.DB_PORT || '5432', 10),
-    });
-
+    const isInitialized = await checkInitialized();
+    if (!isInitialized) {
+      await initializeDatabase({
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        database: process.env.DB_NAME,
+        password: process.env.DB_PASSWORD,
+        port: parseInt(process.env.DB_PORT || '5432', 10),
+      });
+      await initializeDatabaseStructure()
+    }
     const app = express();
 
     app.use(compression());
@@ -89,7 +92,7 @@ const startServer = async () => {
       const userId = (ws).userId;
       let client;
       try {
-        client = await getClient(); 
+        client = await getClient();
         const result = await query('SELECT * FROM contacts');
         const initialContacts = result.rows;
         console.log(`Sending initial contacts for user ${userId}. Count: ${initialContacts.length}`);
@@ -97,10 +100,10 @@ const startServer = async () => {
           type: 'initialContacts',
           contacts: initialContacts
         }));
-    
+
         await client.query('LISTEN contact_changes');
         await client.query('LISTEN interaction_changes');
-    
+
         const dbListener = (msg) => {
           console.log(msg);
           if (msg.channel === 'contact_changes') {
@@ -117,13 +120,13 @@ const startServer = async () => {
             }));
           }
         };
-        
+
         client.on('notification', dbListener);
-    
+
         ws.on('error', (error) => {
           console.error(`WebSocket error for user ${userId}:`, error);
         });
-    
+
         ws.on('close', (code, reason) => {
           console.log(`Client disconnected for user ${userId}. Code: ${code}, Reason: ${reason}`);
           client.removeListener('notification', dbListener);

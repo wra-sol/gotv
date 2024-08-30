@@ -89,7 +89,7 @@ export default function ContactDetail() {
   ];
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-gray-100 min-h-screen">
+    <div className="max-w-4xl mx-auto p-6 min-h-screen">
       <div className="bg-white shadow-md rounded-lg overflow-hidden">
         <div className="bg-blue-600 text-white p-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold">Contact Details</h1>
@@ -175,10 +175,10 @@ export default function ContactDetail() {
           <div className="mt-6 flex justify-between">
             <button
               type="button"
-              onClick={() => navigate("/contacts")}
+              onClick={() => navigate(-1)}
               className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded"
             >
-              Back to Contacts
+              Back
             </button>
             <button
               type="submit"

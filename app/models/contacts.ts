@@ -1,4 +1,4 @@
-import { query, getClient } from "~/utils/db";
+import { query, getClient } from "~/utils/db.server";
 
 export interface Contact {
   id: number;
@@ -23,6 +23,7 @@ export interface Contact {
   created_by: number;
   updated_at: Date;
   updated_by: number;
+  custom_fields?: Record<string, any>;
 }
 
 const contactColumns = [
@@ -40,7 +41,9 @@ function sanitizeContactData(contact: Partial<Contact>): Partial<Contact> {
 export async function getContacts({ 
   offset = 0, 
   limit = 10, 
-  filters = {}
+  filters = {},
+  sortKey,
+  sortDirection
 }: { 
   offset?: number, 
   limit?: number, 
@@ -51,13 +54,15 @@ export async function getContacts({
     electoralDistrict?: string,
     pollId?: string,
     lastNameStartsWith?: string
-  }
-} = {}): Promise<{ contacts: Contact[], total: number }> {
+  },
+  sortKey: keyof Contact,
+  sortDirection: "asc" | "desc"
+}): Promise<{ contacts: Contact[], total: number }> {
   
   let whereClause = [];
   let params = [];
   let index = 1;
-  
+
   if (filters.search) {
     whereClause.push(`(firstname ILIKE $${index} OR surname ILIKE $${index} OR email ILIKE $${index} OR phone ILIKE $${index})`);
     params.push(`%${filters.search}%`);
@@ -93,11 +98,13 @@ export async function getContacts({
     params.push(`${filters.lastNameStartsWith}%`);
     index++;
   }
-  
+  const orderByClause = `ORDER BY ${sortKey} ${sortDirection.toUpperCase()}`;
+
+
   const whereString = whereClause.length > 0 ? `WHERE ${whereClause.join(" AND ")}` : "";
   
   const contactsResult = await query(
-    `SELECT * FROM contacts ${whereString} LIMIT $${index} OFFSET $${index + 1}`,
+`SELECT * FROM contacts ${whereString} ${orderByClause} LIMIT $${index} OFFSET $${index + 1}`,
     [...params, limit, offset]
   );
   
@@ -112,9 +119,18 @@ export async function getContacts({
   };
 }
 
-
 export async function getContactById(id: number): Promise<Contact | undefined> {
   const result = await query("SELECT * FROM contacts WHERE id = $1", [id]);
+  if (result.rows[0]) {
+    const customFieldsResult = await query(
+      "SELECT cf.field_name, cfv.value FROM contact_field_values cfv JOIN custom_fields cf ON cfv.field_id = cf.id WHERE cfv.contact_id = $1",
+      [id]
+    );
+    result.rows[0].custom_fields = customFieldsResult.rows.reduce((acc, row) => {
+      acc[row.field_name] = row.value;
+      return acc;
+    }, {});
+  }
   return result.rows[0];
 }
 
@@ -129,18 +145,43 @@ export async function getContactsByGroupingValue(groupingField: string, value: s
 }
 
 export async function createContact(contact: Omit<Contact, "id" | "created_at" | "updated_at">, userId: number): Promise<number> {
-  const sanitizedContact = sanitizeContactData(contact);
-  const columns = Object.keys(sanitizedContact).join(', ');
-  const placeholders = Object.keys(sanitizedContact).map((_, index) => `$${index + 1}`).join(', ');
-  const values = Object.values(sanitizedContact);
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
 
-  const result = await query(
-    `INSERT INTO contacts (${columns}, created_by, updated_by) 
-     VALUES (${placeholders}, $${values.length + 1}, $${values.length + 2}) RETURNING id`,
-    [...values, userId, userId]
-  );
-  return result.rows[0].id;
+    const sanitizedContact = sanitizeContactData(contact);
+    const columns = Object.keys(sanitizedContact).join(', ');
+    const placeholders = Object.keys(sanitizedContact).map((_, index) => `$${index + 1}`).join(', ');
+    const values = Object.values(sanitizedContact);
+
+    const result = await client.query(
+      `INSERT INTO contacts (${columns}, created_by, updated_by) 
+       VALUES (${placeholders}, $${values.length + 1}, $${values.length + 2}) RETURNING id`,
+      [...values, userId, userId]
+    );
+
+    const contactId = result.rows[0].id;
+
+    if (contact.custom_fields) {
+      for (const [fieldName, value] of Object.entries(contact.custom_fields)) {
+        await client.query(
+          `INSERT INTO contact_field_values (contact_id, field_id, value)
+           SELECT $1, id, $2 FROM custom_fields WHERE field_name = $3 AND section = 'contacts'`,
+          [contactId, value, fieldName]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    return contactId;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
+
 
 export async function createManyContacts(contacts: Omit<Contact, "id" | "created_at" | "updated_at">[], userId: number): Promise<number[]> {
   const client = await getClient();
@@ -175,15 +216,40 @@ export async function createManyContacts(contacts: Omit<Contact, "id" | "created
 }
 
 export async function updateContact(id: number, contact: Partial<Contact>, userId: number): Promise<void> {
-  const sanitizedContact = sanitizeContactData(contact);
-  const entries = Object.entries(sanitizedContact);
-  const setClause = entries.map(([key, _], index) => `${key} = $${index + 1}`).join(', ');
-  const values = entries.map(([_, value]) => value);
-    console.log(values)
-  await query(
-    `UPDATE contacts SET ${setClause}, updated_by = $${values.length + 1}, updated_at = CURRENT_TIMESTAMP WHERE id = $${values.length + 2}`,
-    [...values, userId, id]
-  );
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const sanitizedContact = sanitizeContactData(contact);
+    const entries = Object.entries(sanitizedContact);
+    const setClause = entries.map(([key, _], index) => `${key} = $${index + 1}`).join(', ');
+    const values = entries.map(([_, value]) => value);
+    const result = await client.query(
+      `UPDATE contacts 
+       SET ${setClause}, updated_by = $${values.length + 1}, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $${values.length + 2} 
+       RETURNING *`,
+      [...values, userId, id]
+    );
+
+    if (contact.custom_fields) {
+      for (const [fieldName, value] of Object.entries(contact.custom_fields)) {
+        await client.query(
+          `INSERT INTO contact_field_values (contact_id, field_id, value)
+           SELECT $1, id, $2 FROM custom_fields WHERE field_name = $3 AND section = 'contacts'
+           ON CONFLICT (contact_id, field_id) DO UPDATE SET value = EXCLUDED.value`,
+          [id, value, fieldName]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateContactVotedStatus(contactId: number, voted: boolean): Promise<void> {

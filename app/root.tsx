@@ -76,6 +76,11 @@ export default function App() {
                     </Link>
                   </li>
                   <li>
+                    <Link to="/canvass" className="text-blue-600 hover:underline">
+                      Canvass
+                    </Link>
+                  </li>
+                  <li>
                     <Link
                       to="/settings"
                       className="text-blue-600 hover:underline"

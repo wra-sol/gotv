@@ -1,5 +1,4 @@
-import { query } from "~/utils/db";
-
+import { query } from "~/utils/db.server";
 export interface Settings {
   theme: 'light' | 'dark';
   name: string;
@@ -7,6 +6,14 @@ export interface Settings {
   database_type: 'postgres';
 }
 
+export interface CustomField {
+  id: number;
+  section: string;
+  field_name: string;
+  field_type: string;
+  options: string[] | null;
+  is_default: boolean;
+}
 export async function getSettings(): Promise<Settings> {
   const result = await query("SELECT * FROM settings");
   
@@ -37,4 +44,42 @@ export async function updateMultipleSettings(settings: Partial<Settings>): Promi
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     values
   );
+}
+
+export async function getCustomFields(section: string) {
+  const result = await query(
+    "SELECT * FROM custom_fields WHERE section = $1 ORDER BY id",
+    [section]
+  );
+  return result.rows.map(row => ({
+    ...row,
+    options: row.options ? JSON.parse(row.options) : undefined
+  }));
+}
+
+export async function addCustomField(field: Omit<CustomField, 'id'>): Promise<void> {
+  const { section, field_name, field_type, options, is_default } = field;
+  await query(
+    `INSERT INTO custom_fields (section, field_name, field_type, options, is_default) 
+     VALUES ($1, $2, $3, $4, $5)`,
+    [section, field_name, field_type, options ? JSON.stringify(options) : null, is_default]
+  );
+}
+
+export async function updateCustomField(id: number, field: Partial<CustomField>): Promise<void> {
+  const { section, field_name, field_type, options, is_default } = field;
+  await query(
+    `UPDATE custom_fields 
+     SET section = COALESCE($1, section), 
+         field_name = COALESCE($2, field_name), 
+         field_type = COALESCE($3, field_type), 
+         options = COALESCE($4, options),
+         is_default = COALESCE($5, is_default)
+     WHERE id = $5`,
+    [section, field_name, field_type, options ? JSON.stringify(options) : null, is_default, id]
+  );
+}
+
+export async function deleteCustomField(id: number): Promise<void> {
+  await query("DELETE FROM custom_fields WHERE id = $1", [id]);
 }

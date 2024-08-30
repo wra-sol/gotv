@@ -2,20 +2,15 @@ import { redirect, useLoaderData, Link } from "@remix-run/react";
 import type { LoaderFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { getUser } from "~/utils/auth.server";
-import { checkInitialized, initializeDatabase } from "~/utils/db";
 import { getContacts } from "~/models/contacts";
 import { getSettings } from "~/models/settings";
+import { checkInitialized, ensureConnection } from "~/utils/db.server";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const isInitialized = await checkInitialized();
   if (!isInitialized) {
-    initializeDatabase({
-      user: process.env.DB_USER!,
-      host: process.env.DB_HOST!,
-      database: process.env.DB_NAME!,
-      password: process.env.DB_PASSWORD!,
-      port: parseInt(process.env.DB_PORT || "5432", 10)!,
-    });
+    console.log("Database not initialized. Please run initialization script.");
+    throw new Response("Database not initialized", { status: 500 });
   }
 
   const user = await getUser(request);
@@ -23,12 +18,17 @@ export const loader: LoaderFunction = async ({ request }) => {
     return redirect("/login");
   }
 
-  const [contactCount, settings] = await Promise.all([
-    getContacts({ limit: 1 }).then((result) => result.total),
-    getSettings(),
-  ]);
+  const client = await ensureConnection();
+  try {
+    const [contactCount, settings] = await Promise.all([
+      getContacts({ limit: 1, sortKey:"id", sortDirection:"asc" }).then((result) => result.total),
+      getSettings(),
+    ]);
 
-  return json({ user, contactCount, settings });
+    return json({ user, contactCount, settings });
+  } finally {
+    client.release();
+  }
 };
 
 export default function Index() {

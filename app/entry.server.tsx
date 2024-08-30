@@ -5,6 +5,7 @@ import { createReadableStreamFromReadable } from "@remix-run/node";
 import { RemixServer } from "@remix-run/react";
 import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
+import { initializeDatabase } from "./utils/db.server";
 
 const ABORT_DELAY = 5_000;
 
@@ -32,7 +33,13 @@ export default function handleRequest(
         remixContext
       );
 }
-
+await initializeDatabase({
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: parseInt(process.env.DB_PORT || '5432', 10),
+});
 function handleBotRequest(
   request: Request,
   responseStatusCode: number,

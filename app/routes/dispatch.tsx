@@ -23,6 +23,9 @@ export const loader: LoaderFunction = async ({ request }) => {
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1");
   const limit = parseInt(url.searchParams.get("limit") || "10");
+  const sortKey = url.searchParams.get("sortKey") || "id";
+  const sortDirection = url.searchParams.get("sortDirection") || "asc";
+
   const filters: Filters = {
     search: url.searchParams.get("search") || "",
     rideStatus: url.searchParams.get("rideStatus") || "",
@@ -32,7 +35,7 @@ export const loader: LoaderFunction = async ({ request }) => {
   };
 
   const offset = (page - 1) * limit;
-  const { contacts, total } = await getContacts({ offset, limit, filters });
+  const { contacts, total } = await getContacts({ offset, limit, filters, sortKey, sortDirection });
   const electoralDistricts = await getUniqueGroupingValues("electoral_district");
   const pollIds = await getUniqueGroupingValues("poll_id");
 

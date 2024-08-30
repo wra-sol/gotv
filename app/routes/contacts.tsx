@@ -24,6 +24,7 @@ type LoaderData = {
   search: string;
   userId: string;
 };
+
 export const loader: LoaderFunction = async ({ request }) => {
   const url = new URL(request.url);
   const userId = await getUserId(request);
@@ -33,6 +34,10 @@ export const loader: LoaderFunction = async ({ request }) => {
   const search = url.searchParams.get("search") || "";
 
   const offset = (page - 1) * limit;
+
+  const sortKey = url.searchParams.get("sortKey") || "id";
+  const sortDirection = url.searchParams.get("sortDirection") || "asc";
+
   const { contacts, total } = await getContacts({
     offset,
     limit,
@@ -40,6 +45,8 @@ export const loader: LoaderFunction = async ({ request }) => {
       lastNameStartsWith: letterFilter,
       search: search,
     },
+    sortKey,
+    sortDirection
   });
 
   return json<LoaderData>({
@@ -52,7 +59,6 @@ export const loader: LoaderFunction = async ({ request }) => {
     userId,
   });
 };
-
 export const action: ActionFunction = async ({ request }) => {
   const userId = await getUserId(request);
   if (!userId) return json({ error: "Unauthorized" }, { status: 401 });

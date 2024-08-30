@@ -6,6 +6,7 @@
   "scripts": {
     "build": "remix vite:build",
     "dev": "node ./server.js",
+    "reset-db": "node ./reset-database.js",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
     "start": "cross-env NODE_ENV=production node ./server.js",
     "typecheck": "tsc"

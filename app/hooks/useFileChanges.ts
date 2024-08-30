@@ -15,10 +15,8 @@ export const useFileChanges = (socketUrl, userId) => {
       };
 
       ws.onmessage = (event) => {
-        console.log(event)
         try {
           const data = JSON.parse(event.data);
-          console.log(data);
         } catch (error) {
           setError(error);
         }
@@ -30,7 +28,7 @@ export const useFileChanges = (socketUrl, userId) => {
       };
 
       ws.onclose = (event) => {
-        if (event.wasClean) {
+        if (event.wasClean) { 
           console.log(
             `WebSocket closed cleanly, code=${event.code}, reason=${event.reason}`
           );
@@ -38,7 +36,6 @@ export const useFileChanges = (socketUrl, userId) => {
           console.error("WebSocket connection died");
           setError("WebSocket connection died");
         }
-        // Attempt to reconnect after a delay
         setTimeout(connectWebSocket, 5000);
       };
     };
